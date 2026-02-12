@@ -44,17 +44,21 @@ class InvoiceProcessor:
             
             # Step 2: Map OCR data to database models
             logger.info("Mapping OCR data to database models")
-            po_header, po_lines, po_conditions, grn_header, grn_lines = \
+            (po_header, po_lines, po_conditions, grn_header, grn_lines,
+             supplier_info, buyer_info, item_info) = \
                 self.mapper.map_to_database_models(validated_input)
             
-            # Step 3: Insert into database
+            # Step 3: Insert into database (master data first, then transactional)
             logger.info("Inserting data into database")
             results = await self.db_service.insert_complete_invoice(
                 po_header=po_header,
                 po_lines=po_lines,
                 po_conditions=po_conditions,
                 grn_header=grn_header,
-                grn_lines=grn_lines
+                grn_lines=grn_lines,
+                supplier_info=supplier_info,
+                buyer_info=buyer_info,
+                item_info=item_info
             )
             
             # Step 4: Prepare response

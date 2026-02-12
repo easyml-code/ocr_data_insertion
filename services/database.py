@@ -8,6 +8,7 @@ from datetime import datetime, date
 from models.db_models import (
     GRNHeader, GRNLine, POHeader, POLine, POCondition
 )
+from services.master_data import MasterDataService
 from logs.log import logger
 
 
@@ -23,6 +24,7 @@ class DatabaseService:
         """
         self.run_query = run_query_func
         self.schema = "tenant_data"
+        self.master_data_service = MasterDataService(run_query_func)
     
     async def insert_complete_invoice(
         self,
@@ -30,10 +32,14 @@ class DatabaseService:
         po_lines: List[POLine],
         po_conditions: List[POCondition],
         grn_header: GRNHeader,
-        grn_lines: List[GRNLine]
+        grn_lines: List[GRNLine],
+        supplier_info: Dict[str, Any],
+        buyer_info: Dict[str, Any],
+        item_info: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
         Insert complete invoice data (PO and GRN) into database
+        First ensures all master data exists, then inserts transactional data
         Returns summary of inserted records
         """
         results = {
@@ -47,7 +53,57 @@ class DatabaseService:
         }
         
         try:
-            # Insert PO Header if exists
+            # Step 1: Ensure all master data exists
+            logger.info("Ensuring master data exists...")
+            
+            # Ensure supplier and supplier site
+            await self.master_data_service.ensure_supplier(
+                supplier_ref=supplier_info['supplier_ref'],
+                supplier_name=supplier_info['supplier_name'],
+                supplier_gstn=supplier_info.get('supplier_gstn')
+            )
+            await self.master_data_service.ensure_supplier_site(
+                site_ref=supplier_info['supplier_site_ref'],
+                supplier_ref=supplier_info['supplier_ref'],
+                address=supplier_info.get('supplier_address'),
+                gstn=supplier_info.get('supplier_gstn')
+            )
+            
+            # Ensure legal entity and legal entity site
+            await self.master_data_service.ensure_legal_entity(
+                entity_ref=buyer_info['legal_entity_ref'],
+                gstn=buyer_info.get('location_gstn')
+            )
+            await self.master_data_service.ensure_legal_entity_site(
+                site_ref=buyer_info['legal_entity_site_ref'],
+                entity_ref=buyer_info['legal_entity_ref'],
+                address=buyer_info.get('bill_to_address'),
+                gstn=buyer_info.get('location_gstn')
+            )
+            
+            # Ensure all items exist
+            for item in item_info:
+                await self.master_data_service.ensure_item(
+                    item_ref=item['item_ref'],
+                    description=item['description'],
+                    hsn_code=item['hsn_code'],
+                    uom=item.get('uom', 'EA')
+                )
+            
+            # If PO exists, ensure its master data
+            if po_header:
+                await self.master_data_service.ensure_cost_center(po_header.s_cost_center_ref)
+                await self.master_data_service.ensure_profit_center(po_header.s_profit_center_ref)
+                await self.master_data_service.ensure_project(po_header.s_project_ref)
+                await self.master_data_service.ensure_plant(po_header.s_plant_ref)
+                await self.master_data_service.ensure_tax_rate(po_header.s_tax_rate_ref)
+            
+            # Ensure GL account for GRN
+            await self.master_data_service.ensure_gl_account(grn_header.s_gl_account_ref)
+            
+            logger.info("All master data ensured successfully")
+            
+            # Step 2: Insert PO Header if exists
             if po_header:
                 await self._insert_po_header(po_header)
                 results["po_header_id"] = str(po_header.id)
@@ -65,11 +121,11 @@ class DatabaseService:
                     results["po_conditions_count"] += 1
                 logger.info(f"Inserted {len(po_conditions)} PO Conditions")
             
-            # Insert GRN Header
+            # Step 3: Insert GRN Header
             await self._insert_grn_header(grn_header)
             logger.info(f"Inserted GRN Header: {grn_header.s_grn_number}")
             
-            # Insert GRN Lines
+            # Step 4: Insert GRN Lines
             for grn_line in grn_lines:
                 await self._insert_grn_line(grn_line)
                 results["grn_lines_count"] += 1
