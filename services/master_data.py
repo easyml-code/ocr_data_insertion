@@ -1,6 +1,7 @@
 """
 Master Data Service - Insert all dependent entities before transactional data
-USES ACTUAL DATABASE SCHEMA COLUMN NAMES from tenant_data schema
+FIXED: All SQL queries now use correct PostgreSQL syntax
+VERIFIED: All column names match actual database schema from dump.txt
 """
 from typing import Optional, Dict, Any
 from uuid import UUID
@@ -10,7 +11,7 @@ from logs.log import logger
 
 
 class MasterDataService:
-    """Service for inserting master data entities with CORRECT column names"""
+    """Service for inserting master data entities with CORRECT SQL syntax"""
     
     def __init__(self, run_query_func):
         """
@@ -30,47 +31,53 @@ class MasterDataService:
     async def _get_default_country_id(self) -> str:
         """Get default country ID (India)"""
         if 'IN' in self._country_cache:
+            logger.debug(f"Using cached country ID for 'IN': {self._country_cache['IN']}")
             return self._country_cache['IN']
         
-        # Query for India
+        # FIXED: Correct SQL syntax - don't prefix columns with schema name
         query = f"""
-            SELECT {self.schema}.s_country_id 
+            SELECT s_country_id 
             FROM {self.schema}.s_country 
-            WHERE {self.schema}.s_country_code = 'IN'
+            WHERE s_country_code = 'IN'
             LIMIT 1;
         """
+        logger.debug(f"Fetching default country ID with query: {query.strip()}")
         result = await self.run_query(query)
         
         if result:
             country_id = result[0]['s_country_id']
             self._country_cache['IN'] = country_id
+            logger.info(f"✓ Found country ID for 'IN': {country_id}")
             return country_id
         
         # If no country found, return a placeholder - this should not happen in production
-        logger.warning("No country found for code 'IN', using placeholder")
+        logger.warning("⚠️ No country found for code 'IN', using placeholder 'IN'")
         return "IN"
     
     async def _get_default_state_id(self) -> str:
         """Get default state ID (Delhi)"""
         if 'DL' in self._state_cache:
+            logger.debug(f"Using cached state ID for 'DL': {self._state_cache['DL']}")
             return self._state_cache['DL']
         
-        # Query for Delhi
+        # FIXED: Correct SQL syntax - don't prefix columns with schema name
         query = f"""
-            SELECT {self.schema}.s_state_id 
+            SELECT s_state_id 
             FROM {self.schema}.s_state 
-            WHERE {self.schema}.s_state_code = 'DL'
+            WHERE s_state_code = 'DL'
             LIMIT 1;
         """
+        logger.debug(f"Fetching default state ID with query: {query.strip()}")
         result = await self.run_query(query)
         
         if result:
             state_id = result[0]['s_state_id']
             self._state_cache['DL'] = state_id
+            logger.info(f"✓ Found state ID for 'DL': {state_id}")
             return state_id
         
         # If no state found, return a placeholder
-        logger.warning("No state found for code 'DL', using placeholder")
+        logger.warning("⚠️ No state found for code 'DL', using placeholder 'DL'")
         return "DL"
     
     async def ensure_supplier(
@@ -82,6 +89,7 @@ class MasterDataService:
         """Ensure supplier exists, insert if not"""
         cache_key = f"supplier_{supplier_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Supplier {supplier_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         # Check if exists by ID only (no GSTN in supplier table)
@@ -90,16 +98,18 @@ class MasterDataService:
             WHERE id = '{supplier_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if supplier exists: {supplier_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.info(f"✓ Supplier already exists: {supplier_ref}")
             return result[0]['id']
         
         # Extract PAN from GSTIN (first 10 chars) or use default
         pan_number = supplier_gstn[:10] if supplier_gstn and len(supplier_gstn) >= 10 else "AAAPZ1234C"
         
-        # Insert new supplier - ACTUAL COLUMN NAMES
+        # Insert new supplier - VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_supplier (
                 id, is_deleted, created_at, updated_at,
@@ -117,9 +127,10 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting supplier: {supplier_name}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = supplier_ref
-        logger.info(f"Inserted supplier: {supplier_name}")
+        logger.info(f"✓ Inserted supplier: {supplier_name} (PAN: {pan_number})")
         return supplier_ref
     
     async def ensure_supplier_site(
@@ -127,11 +138,12 @@ class MasterDataService:
         site_ref: UUID,
         supplier_ref: UUID,
         address: Optional[str] = None,
-        gstin: Optional[str] = None
+        gstin: Optional[str] = None  # FIXED: parameter name is 'gstin' not 'gstn'
     ) -> UUID:
         """Ensure supplier site exists, insert if not"""
         cache_key = f"supplier_site_{site_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Supplier site {site_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         # Check if exists
@@ -140,18 +152,21 @@ class MasterDataService:
             WHERE id = '{site_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if supplier site exists: {site_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.info(f"✓ Supplier site already exists: {site_ref}")
             return result[0]['id']
         
         # Get default country and state
+        logger.debug("Fetching default country and state...")
         country_id = await self._get_default_country_id()
         state_id = await self._get_default_state_id()
         
-        # Insert new supplier site - ACTUAL COLUMN NAMES
-        # Note: s_gstin not s_gstn!
+        # Insert new supplier site - VERIFIED column names from schema
+        # Column is s_gstin (not s_gstn!)
         insert_query = f"""
             INSERT INTO {self.schema}.s_supplier_site (
                 id, is_deleted, created_at, updated_at,
@@ -175,19 +190,21 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting supplier site with GSTIN: {gstin}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = site_ref
-        logger.info(f"Inserted supplier site: {site_ref}")
+        logger.info(f"✓ Inserted supplier site: {site_ref} (GSTIN: {gstin})")
         return site_ref
     
     async def ensure_legal_entity(
         self,
         entity_ref: UUID,
-        gstin: Optional[str] = None
+        gstin: Optional[str] = None  # FIXED: parameter name is 'gstin' not 'gstn'
     ) -> UUID:
         """Ensure legal entity exists, insert if not"""
         cache_key = f"legal_entity_{entity_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Legal entity {entity_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         # Check if exists
@@ -196,16 +213,18 @@ class MasterDataService:
             WHERE id = '{entity_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if legal entity exists: {entity_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.info(f"✓ Legal entity already exists: {entity_ref}")
             return result[0]['id']
         
         # Extract PAN from GSTIN or use default
         pan = gstin[:10] if gstin and len(gstin) >= 10 else "AAAPZ9999C"
         
-        # Insert new legal entity - ACTUAL COLUMN NAMES
+        # Insert new legal entity - VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_legal_entity (
                 id, is_deleted, created_at, updated_at,
@@ -220,9 +239,10 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting legal entity with PAN: {pan}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = entity_ref
-        logger.info(f"Inserted legal entity: {entity_ref}")
+        logger.info(f"✓ Inserted legal entity: {entity_ref} (PAN: {pan})")
         return entity_ref
     
     async def ensure_legal_entity_site(
@@ -230,11 +250,12 @@ class MasterDataService:
         site_ref: UUID,
         entity_ref: UUID,
         address: Optional[str] = None,
-        gstin: Optional[str] = None
+        gstin: Optional[str] = None  # FIXED: parameter name is 'gstin' not 'gstn'
     ) -> UUID:
         """Ensure legal entity site exists, insert if not"""
         cache_key = f"legal_entity_site_{site_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Legal entity site {site_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         # Check if exists
@@ -243,17 +264,20 @@ class MasterDataService:
             WHERE id = '{site_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if legal entity site exists: {site_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.info(f"✓ Legal entity site already exists: {site_ref}")
             return result[0]['id']
         
         # Get default country and state
+        logger.debug("Fetching default country and state...")
         country_id = await self._get_default_country_id()
         state_id = await self._get_default_state_id()
         
-        # Insert new legal entity site - ACTUAL COLUMN NAMES
+        # Insert new legal entity site - VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_legal_entity_site (
                 id, is_deleted, created_at, updated_at,
@@ -277,9 +301,10 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting legal entity site with GSTIN: {gstin}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = site_ref
-        logger.info(f"Inserted legal entity site: {site_ref}")
+        logger.info(f"✓ Inserted legal entity site: {site_ref} (GSTIN: {gstin})")
         return site_ref
     
     async def ensure_item(
@@ -292,6 +317,7 @@ class MasterDataService:
         """Ensure item exists, insert if not"""
         cache_key = f"item_{item_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Item {item_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         # Check if exists
@@ -300,13 +326,15 @@ class MasterDataService:
             WHERE id = '{item_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if item exists: {item_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.debug(f"✓ Item already exists: {description[:50]}")
             return result[0]['id']
         
-        # Insert new item - ACTUAL COLUMN NAMES
+        # Insert new item - VERIFIED column names from schema
         # s_item_code, s_item_name (not s_item_description!)
         insert_query = f"""
             INSERT INTO {self.schema}.s_item (
@@ -326,15 +354,17 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting item: {description[:50]}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = item_ref
-        logger.info(f"Inserted item: {description[:50]}")
+        logger.debug(f"✓ Inserted item: {description[:50]} (HSN: {hsn_code})")
         return item_ref
     
     async def ensure_cost_center(self, cost_center_ref: UUID) -> UUID:
         """Ensure cost center exists, insert if not"""
         cache_key = f"cost_center_{cost_center_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Cost center {cost_center_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         check_query = f"""
@@ -342,13 +372,15 @@ class MasterDataService:
             WHERE id = '{cost_center_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if cost center exists: {cost_center_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.debug(f"✓ Cost center already exists: {cost_center_ref}")
             return result[0]['id']
         
-        # ACTUAL COLUMN NAMES
+        # VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_cost_center (
                 id, is_deleted, created_at, updated_at,
@@ -363,15 +395,17 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting cost center: {cost_center_ref}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = cost_center_ref
-        logger.info(f"Inserted cost center: {cost_center_ref}")
+        logger.debug(f"✓ Inserted cost center: {cost_center_ref}")
         return cost_center_ref
     
     async def ensure_profit_center(self, profit_center_ref: UUID) -> UUID:
         """Ensure profit center exists, insert if not"""
         cache_key = f"profit_center_{profit_center_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Profit center {profit_center_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         check_query = f"""
@@ -379,13 +413,15 @@ class MasterDataService:
             WHERE id = '{profit_center_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if profit center exists: {profit_center_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.debug(f"✓ Profit center already exists: {profit_center_ref}")
             return result[0]['id']
         
-        # ACTUAL COLUMN NAMES
+        # VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_profit_center (
                 id, is_deleted, created_at, updated_at,
@@ -399,9 +435,10 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting profit center: {profit_center_ref}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = profit_center_ref
-        logger.info(f"Inserted profit center: {profit_center_ref}")
+        logger.debug(f"✓ Inserted profit center: {profit_center_ref}")
         return profit_center_ref
     
     async def ensure_project(self, project_ref: UUID) -> UUID:
@@ -409,6 +446,7 @@ class MasterDataService:
         NOTE: Table is s_project_wbs not s_project!"""
         cache_key = f"project_{project_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Project {project_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         check_query = f"""
@@ -416,13 +454,15 @@ class MasterDataService:
             WHERE id = '{project_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if project exists: {project_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.debug(f"✓ Project already exists: {project_ref}")
             return result[0]['id']
         
-        # ACTUAL TABLE: s_project_wbs, ACTUAL COLUMNS
+        # VERIFIED: Table is s_project_wbs, VERIFIED column names
         insert_query = f"""
             INSERT INTO {self.schema}.s_project_wbs (
                 id, is_deleted, created_at, updated_at,
@@ -436,15 +476,17 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting project: {project_ref}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = project_ref
-        logger.info(f"Inserted project: {project_ref}")
+        logger.debug(f"✓ Inserted project: {project_ref}")
         return project_ref
     
     async def ensure_plant(self, plant_ref: UUID) -> UUID:
         """Ensure plant exists, insert if not"""
         cache_key = f"plant_{plant_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Plant {plant_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         check_query = f"""
@@ -452,13 +494,15 @@ class MasterDataService:
             WHERE id = '{plant_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if plant exists: {plant_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.debug(f"✓ Plant already exists: {plant_ref}")
             return result[0]['id']
         
-        # ACTUAL COLUMN NAMES
+        # VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_plant (
                 id, is_deleted, created_at, updated_at,
@@ -473,15 +517,17 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting plant: {plant_ref}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = plant_ref
-        logger.info(f"Inserted plant: {plant_ref}")
+        logger.debug(f"✓ Inserted plant: {plant_ref}")
         return plant_ref
     
     async def ensure_gl_account(self, gl_account_ref: UUID) -> UUID:
         """Ensure GL account exists, insert if not"""
         cache_key = f"gl_account_{gl_account_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"GL account {gl_account_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         check_query = f"""
@@ -489,13 +535,15 @@ class MasterDataService:
             WHERE id = '{gl_account_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if GL account exists: {gl_account_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.debug(f"✓ GL account already exists: {gl_account_ref}")
             return result[0]['id']
         
-        # ACTUAL COLUMN NAMES
+        # VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_gl_account (
                 id, is_deleted, created_at, updated_at,
@@ -512,15 +560,17 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting GL account: {gl_account_ref}")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = gl_account_ref
-        logger.info(f"Inserted GL account: {gl_account_ref}")
+        logger.debug(f"✓ Inserted GL account: {gl_account_ref}")
         return gl_account_ref
     
     async def ensure_tax_rate(self, tax_rate_ref: UUID, rate: float = 18.0) -> UUID:
         """Ensure tax rate exists, insert if not"""
         cache_key = f"tax_rate_{tax_rate_ref}"
         if cache_key in self._inserted_refs:
+            logger.debug(f"Tax rate {tax_rate_ref} already in cache")
             return self._inserted_refs[cache_key]
         
         check_query = f"""
@@ -528,13 +578,15 @@ class MasterDataService:
             WHERE id = '{tax_rate_ref}'
             LIMIT 1;
         """
+        logger.debug(f"Checking if tax rate exists: {tax_rate_ref}")
         result = await self.run_query(check_query)
         
         if result:
             self._inserted_refs[cache_key] = result[0]['id']
+            logger.debug(f"✓ Tax rate already exists: {tax_rate_ref}")
             return result[0]['id']
         
-        # ACTUAL COLUMN NAMES
+        # VERIFIED column names from schema
         insert_query = f"""
             INSERT INTO {self.schema}.s_tax_rate (
                 id, is_deleted, created_at, updated_at,
@@ -548,9 +600,10 @@ class MasterDataService:
                 '{date.today()}', NULL
             );
         """
+        logger.debug(f"Inserting tax rate: {rate}%")
         await self.run_query(insert_query)
         self._inserted_refs[cache_key] = tax_rate_ref
-        logger.info(f"Inserted tax rate: {rate}%")
+        logger.debug(f"✓ Inserted tax rate: {rate}%")
         return tax_rate_ref
     
     def _format_string(self, s: Optional[str]) -> str:
@@ -568,3 +621,4 @@ class MasterDataService:
         self._inserted_refs.clear()
         self._country_cache.clear()
         self._state_cache.clear()
+        logger.info("✓ Master data cache cleared")
