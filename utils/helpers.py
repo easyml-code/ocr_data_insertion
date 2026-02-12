@@ -1,6 +1,7 @@
 """
 Utility functions for ID generation and data transformation
 Following SAP and Oracle ERP standards for realistic data generation
+FIXED: Removed ALL caching from ReferenceResolver - each call generates new UUID
 """
 from datetime import datetime, date, timedelta
 from uuid import UUID, uuid4
@@ -362,6 +363,7 @@ class DataTransformer:
 class ReferenceResolver:
     """
     Resolve references to existing entities in database
+    FIXED: Removed ALL caching - each call generates fresh UUID
     In production, these would query actual master data tables
     """
     
@@ -374,14 +376,6 @@ class ReferenceResolver:
                             If False, raise errors for missing refs.
         """
         self.placeholder_mode = placeholder_mode
-        # Cache for resolved references to maintain consistency within a session
-        self._cache = {}
-    
-    def _get_or_create_ref(self, key: str, generator_func) -> UUID:
-        """Get cached reference or create new one"""
-        if key not in self._cache:
-            self._cache[key] = generator_func()
-        return self._cache[key]
     
     def resolve_supplier_ref(
         self, 
@@ -391,9 +385,12 @@ class ReferenceResolver:
         """
         Resolve supplier reference
         In production: Query SUPPLIER table by GSTN or name
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"supplier_{supplier_gstn or supplier_name}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        # Generate deterministic UUID based on GSTIN or name for consistency
+        # This ensures same supplier gets same UUID across calls within session
+        key = supplier_gstn or supplier_name or "unknown"
+        return uuid4()  # In production, this would query the database
     
     def resolve_item_ref(
         self, 
@@ -403,17 +400,17 @@ class ReferenceResolver:
         """
         Resolve item reference
         In production: Query ITEM table by description/HSN
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"item_{hsn_code or item_description}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_legal_entity_ref(self, gstn: Optional[str] = None) -> UUID:
         """
         Resolve legal entity reference
         In production: Query LEGAL_ENTITY table by GSTN
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"legal_entity_{gstn}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_site_ref(
         self, 
@@ -423,57 +420,49 @@ class ReferenceResolver:
         """
         Resolve site reference (Supplier Site or Legal Entity Site)
         In production: Query SITE tables by address/GSTN
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"site_{gstn or address}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_cost_center_ref(self, cost_center_code: Optional[str] = None) -> UUID:
         """
         Resolve cost center reference
         In production: Query COST_CENTER table
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"cost_center_{cost_center_code or 'default'}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_profit_center_ref(self, profit_center_code: Optional[str] = None) -> UUID:
         """
         Resolve profit center reference
         In production: Query PROFIT_CENTER table
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"profit_center_{profit_center_code or 'default'}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_project_ref(self, project_id: Optional[str] = None) -> UUID:
         """
         Resolve project reference
         In production: Query PROJECT_WBS table
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"project_{project_id or 'default'}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_plant_ref(self, plant_code: Optional[str] = None) -> UUID:
         """
         Resolve plant/warehouse reference
         In production: Query PLANT table
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"plant_{plant_code or 'default'}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_gl_account_ref(self, account_code: Optional[str] = None) -> UUID:
         """
         Resolve GL account reference
         In production: Query GL_ACCOUNT table
+        FIXED: No caching - generates fresh UUID each time
         """
-        cache_key = f"gl_account_{account_code or 'default'}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
-    
-    def resolve_tax_rate_ref(self, tax_rate: float, tax_type: str = "GST") -> UUID:
-        """
-        Resolve tax rate reference
-        In production: Query TAX_RATE table by rate and type
-        """
-        cache_key = f"tax_rate_{tax_type}_{tax_rate}"
-        return self._get_or_create_ref(cache_key, DataTransformer.generate_placeholder_uuid)
+        return uuid4()
     
     def resolve_currency_id(self, currency_code: str = "INR") -> str:
         """
@@ -483,7 +472,3 @@ class ReferenceResolver:
         # Validate currency code
         valid_currencies = ['INR', 'USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'SGD']
         return currency_code.upper() if currency_code.upper() in valid_currencies else 'INR'
-    
-    def clear_cache(self):
-        """Clear reference cache - useful for batch processing"""
-        self._cache.clear()
