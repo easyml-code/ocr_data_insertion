@@ -1,0 +1,51 @@
+{
+  "dynamic": [
+    {
+      "Invoice Lines/Description": "Dell UltraSharp 27-inch QHD IPS Monitor, 165Hz, USB-C",
+      "Quantity": "1",
+      "Line Amount": "17999.00",
+      "Unit Price": "17999.00",
+      "HSN Number": "852851",
+      "igst_rate": "18",
+      "sgst_rate": "",
+      "cgst_rate": "",
+      "utgst_rate": "",
+      "PO Number": "9500877232",
+      "line_no": "",
+      "unit": "EA"
+    }
+  ],
+  "static": {
+    "Invoice Date": ["15-Aug-2025"],
+    "Invoice Currency": ["INR"],
+    "supplier_city": ["Hyderabad"],
+    "supplier_state": ["INDIA"],
+    "Total Invoice Amount": ["21238.82"],
+    "Invoice Tax Amount": ["3239.82"],
+    "subtotal": ["17999.00"],
+    "delivery_location": ["Mumbai, Maharashtra- 400028"],
+    "Invoice information": [""],
+    "account_number": ["054205001505"],
+    "bill_to_address": ["252, Veer Savarkar Road, Shivaji Park, Mumbai, Maharashtra- 400028"],
+    "ship_to_address": ["D-9, Banjara Hills, Hyderabad"],
+    "shipping_amount": [""],
+    "hsn_code": ["852851"],
+    "Supplier GSTN": ["36ABCDE1234F1Z5"],
+    "Location GSTN": ["36ABCDE1234F1Z5"],
+    "Supplier Name": ["Orion Corp"],
+    "irn": ["36ABCDE1234F1Z5"],
+    "Invoice No": ["2024-29/09/007"],
+    "CGST": [""],
+    "SGST": [""],
+    "IGST": ["18%"],
+    "PO Number": ["9500877232"],
+    "supplier_address": ["D-9, Banjara Hills, Hyderabad"],
+    "consumer_number": [""],
+    "customer_address": ["252, Veer Savarkar Road, Shivaji Park, Mumbai, Maharashtra- 400028"],
+    "file_name": ["invoice_2024-29_09_007.pdf"],
+    "gst_number": [""],
+    "due_date": [""],
+    "Applicable Tax": [""],
+    "currency": [""]
+  }
+}
