@@ -1,6 +1,6 @@
 """
 Master Data Service - Insert all dependent entities before transactional data
-Handles: Supplier, Sites, Items, Legal Entities, Cost Centers, etc.
+USES ACTUAL DATABASE SCHEMA COLUMN NAMES from tenant_data schema
 """
 from typing import Optional, Dict, Any
 from uuid import UUID
@@ -10,7 +10,7 @@ from logs.log import logger
 
 
 class MasterDataService:
-    """Service for inserting master data entities"""
+    """Service for inserting master data entities with CORRECT column names"""
     
     def __init__(self, run_query_func):
         """
@@ -22,6 +22,56 @@ class MasterDataService:
         self.run_query = run_query_func
         self.schema = "tenant_data"
         self._inserted_refs = {}  # Track what we've already inserted
+        
+        # Cache for reference data (country, state) to avoid repeated queries
+        self._country_cache = {}
+        self._state_cache = {}
+    
+    async def _get_default_country_id(self) -> str:
+        """Get default country ID (India)"""
+        if 'IN' in self._country_cache:
+            return self._country_cache['IN']
+        
+        # Query for India
+        query = f"""
+            SELECT {self.schema}.s_country_id 
+            FROM {self.schema}.s_country 
+            WHERE {self.schema}.s_country_code = 'IN'
+            LIMIT 1;
+        """
+        result = await self.run_query(query)
+        
+        if result:
+            country_id = result[0]['s_country_id']
+            self._country_cache['IN'] = country_id
+            return country_id
+        
+        # If no country found, return a placeholder - this should not happen in production
+        logger.warning("No country found for code 'IN', using placeholder")
+        return "IN"
+    
+    async def _get_default_state_id(self) -> str:
+        """Get default state ID (Delhi)"""
+        if 'DL' in self._state_cache:
+            return self._state_cache['DL']
+        
+        # Query for Delhi
+        query = f"""
+            SELECT {self.schema}.s_state_id 
+            FROM {self.schema}.s_state 
+            WHERE {self.schema}.s_state_code = 'DL'
+            LIMIT 1;
+        """
+        result = await self.run_query(query)
+        
+        if result:
+            state_id = result[0]['s_state_id']
+            self._state_cache['DL'] = state_id
+            return state_id
+        
+        # If no state found, return a placeholder
+        logger.warning("No state found for code 'DL', using placeholder")
+        return "DL"
     
     async def ensure_supplier(
         self,
@@ -34,10 +84,10 @@ class MasterDataService:
         if cache_key in self._inserted_refs:
             return self._inserted_refs[cache_key]
         
-        # Check if exists
+        # Check if exists by ID only (no GSTN in supplier table)
         check_query = f"""
             SELECT id FROM {self.schema}.s_supplier 
-            WHERE id = '{supplier_ref}' OR s_gstn = {self._format_string(supplier_gstn)}
+            WHERE id = '{supplier_ref}'
             LIMIT 1;
         """
         result = await self.run_query(check_query)
@@ -46,23 +96,24 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
-        # Insert new supplier
+        # Extract PAN from GSTIN (first 10 chars) or use default
+        pan_number = supplier_gstn[:10] if supplier_gstn and len(supplier_gstn) >= 10 else "AAAPZ1234C"
+        
+        # Insert new supplier - ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_supplier (
                 id, is_deleted, created_at, updated_at,
-                s_supplier_name, s_gstn, s_supplier_code,
-                s_supplier_type, s_payment_terms, s_currency_id,
-                s_tax_registration_number, s_active_flag,
+                s_supplier_id, s_supplier_code, s_legal_name, s_pan_number,
+                s_supplier_type, s_msme_flag,
                 s_effective_from, s_effective_to
             ) VALUES (
                 '{supplier_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
-                '{self._escape_string(supplier_name)}',
-                {self._format_string(supplier_gstn)},
+                '{str(supplier_ref)[:36]}',
                 '{str(supplier_ref)[:20]}',
-                'VENDOR', '0002', 'INR',
-                {self._format_string(supplier_gstn)},
-                true,
+                '{self._escape_string(supplier_name[:255])}',
+                '{pan_number}',
+                'COMPANY', false,
                 '{date.today()}', NULL
             );
         """
@@ -76,7 +127,7 @@ class MasterDataService:
         site_ref: UUID,
         supplier_ref: UUID,
         address: Optional[str] = None,
-        gstn: Optional[str] = None
+        gstin: Optional[str] = None
     ) -> UUID:
         """Ensure supplier site exists, insert if not"""
         cache_key = f"supplier_site_{site_ref}"
@@ -95,21 +146,32 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
-        # Insert new supplier site
+        # Get default country and state
+        country_id = await self._get_default_country_id()
+        state_id = await self._get_default_state_id()
+        
+        # Insert new supplier site - ACTUAL COLUMN NAMES
+        # Note: s_gstin not s_gstn!
         insert_query = f"""
             INSERT INTO {self.schema}.s_supplier_site (
                 id, is_deleted, created_at, updated_at,
-                s_supplier_ref, s_site_name, s_address_line1,
-                s_gstn, s_active_flag,
+                s_supplier_site_id, s_gstin, s_country_id, s_state_id,
+                s_building_name, s_floor_unit, s_city, s_pin_code,
+                s_supplier_ref, s_sez_flag, s_default_dispatch_flag, s_default_billing_flag,
                 s_effective_from, s_effective_to
             ) VALUES (
                 '{site_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(site_ref)[:36]}',
+                {self._format_string(gstin)},
+                '{country_id}',
+                '{state_id}',
+                'Default Building',
+                'Ground Floor',
+                'Delhi',
+                '110001',
                 '{supplier_ref}',
-                'Primary Site',
-                {self._format_string(address or 'Address Not Provided')},
-                {self._format_string(gstn)},
-                true,
+                false, true, true,
                 '{date.today()}', NULL
             );
         """
@@ -121,7 +183,7 @@ class MasterDataService:
     async def ensure_legal_entity(
         self,
         entity_ref: UUID,
-        gstn: Optional[str] = None
+        gstin: Optional[str] = None
     ) -> UUID:
         """Ensure legal entity exists, insert if not"""
         cache_key = f"legal_entity_{entity_ref}"
@@ -131,7 +193,7 @@ class MasterDataService:
         # Check if exists
         check_query = f"""
             SELECT id FROM {self.schema}.s_legal_entity
-            WHERE id = '{entity_ref}' OR s_gstn = {self._format_string(gstn)}
+            WHERE id = '{entity_ref}'
             LIMIT 1;
         """
         result = await self.run_query(check_query)
@@ -140,21 +202,22 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
-        # Insert new legal entity
+        # Extract PAN from GSTIN or use default
+        pan = gstin[:10] if gstin and len(gstin) >= 10 else "AAAPZ9999C"
+        
+        # Insert new legal entity - ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_legal_entity (
                 id, is_deleted, created_at, updated_at,
-                s_legal_entity_name, s_legal_entity_code,
-                s_gstn, s_pan, s_currency_id,
-                s_active_flag, s_effective_from, s_effective_to
+                s_legal_entity_id, s_legal_entity_name, s_legal_entity_pan,
+                s_effective_from, s_effective_to
             ) VALUES (
                 '{entity_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(entity_ref)[:36]}',
                 'Default Legal Entity',
-                '{str(entity_ref)[:20]}',
-                {self._format_string(gstn)},
-                NULL, 'INR',
-                true, '{date.today()}', NULL
+                '{pan}',
+                '{date.today()}', NULL
             );
         """
         await self.run_query(insert_query)
@@ -167,7 +230,7 @@ class MasterDataService:
         site_ref: UUID,
         entity_ref: UUID,
         address: Optional[str] = None,
-        gstn: Optional[str] = None
+        gstin: Optional[str] = None
     ) -> UUID:
         """Ensure legal entity site exists, insert if not"""
         cache_key = f"legal_entity_site_{site_ref}"
@@ -186,21 +249,31 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
-        # Insert new legal entity site
+        # Get default country and state
+        country_id = await self._get_default_country_id()
+        state_id = await self._get_default_state_id()
+        
+        # Insert new legal entity site - ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_legal_entity_site (
                 id, is_deleted, created_at, updated_at,
-                s_legal_entity_ref, s_site_name, s_address_line1,
-                s_gstn, s_active_flag,
+                s_legal_entity_site_id, s_gstin, s_country_id, s_state_id,
+                s_building_name, s_floor_unit, s_city, s_pin_code,
+                s_legal_entity_ref, s_sez_flag, s_default_shipping_flag, s_default_billing_flag,
                 s_effective_from, s_effective_to
             ) VALUES (
                 '{site_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(site_ref)[:36]}',
+                {self._format_string(gstin)},
+                '{country_id}',
+                '{state_id}',
+                'Default Building',
+                'Ground Floor',
+                'Delhi',
+                '110001',
                 '{entity_ref}',
-                'Primary Site',
-                {self._format_string(address or 'Address Not Provided')},
-                {self._format_string(gstn)},
-                true,
+                false, true, true,
                 '{date.today()}', NULL
             );
         """
@@ -233,20 +306,23 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
-        # Insert new item
+        # Insert new item - ACTUAL COLUMN NAMES
+        # s_item_code, s_item_name (not s_item_description!)
         insert_query = f"""
             INSERT INTO {self.schema}.s_item (
                 id, is_deleted, created_at, updated_at,
-                s_item_code, s_item_description, s_hsn_code,
-                s_base_uom_id, s_item_type, s_active_flag,
+                s_item_id, s_item_code, s_item_name, s_item_category,
+                s_hsn_id, s_uom_id,
                 s_effective_from, s_effective_to
             ) VALUES (
                 '{item_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(item_ref)[:36]}',
                 '{str(item_ref)[:50]}',
                 '{self._escape_string(description[:255])}',
+                'MATERIAL',
                 '{hsn_code}',
-                '{uom}', 'MATERIAL', true,
+                '{uom}',
                 '{date.today()}', NULL
             );
         """
@@ -272,17 +348,19 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
+        # ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_cost_center (
                 id, is_deleted, created_at, updated_at,
-                s_cost_center_code, s_cost_center_name,
-                s_active_flag, s_effective_from, s_effective_to
+                s_cost_center_id, s_cost_center_code, s_cost_center_description,
+                s_effective_from, s_effective_to
             ) VALUES (
                 '{cost_center_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(cost_center_ref)[:36]}',
                 '{str(cost_center_ref)[:20]}',
                 'Default Cost Center',
-                true, '{date.today()}', NULL
+                '{date.today()}', NULL
             );
         """
         await self.run_query(insert_query)
@@ -307,17 +385,18 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
+        # ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_profit_center (
                 id, is_deleted, created_at, updated_at,
-                s_profit_center_code, s_profit_center_name,
-                s_active_flag, s_effective_from, s_effective_to
+                s_profit_center_id, s_profit_center_code,
+                s_effective_from, s_effective_to
             ) VALUES (
                 '{profit_center_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(profit_center_ref)[:36]}',
                 '{str(profit_center_ref)[:20]}',
-                'Default Profit Center',
-                true, '{date.today()}', NULL
+                '{date.today()}', NULL
             );
         """
         await self.run_query(insert_query)
@@ -326,13 +405,14 @@ class MasterDataService:
         return profit_center_ref
     
     async def ensure_project(self, project_ref: UUID) -> UUID:
-        """Ensure project exists, insert if not"""
+        """Ensure project exists, insert if not
+        NOTE: Table is s_project_wbs not s_project!"""
         cache_key = f"project_{project_ref}"
         if cache_key in self._inserted_refs:
             return self._inserted_refs[cache_key]
         
         check_query = f"""
-            SELECT id FROM {self.schema}.s_project
+            SELECT id FROM {self.schema}.s_project_wbs
             WHERE id = '{project_ref}'
             LIMIT 1;
         """
@@ -342,17 +422,18 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
+        # ACTUAL TABLE: s_project_wbs, ACTUAL COLUMNS
         insert_query = f"""
-            INSERT INTO {self.schema}.s_project (
+            INSERT INTO {self.schema}.s_project_wbs (
                 id, is_deleted, created_at, updated_at,
-                s_project_code, s_project_name,
-                s_active_flag, s_effective_from, s_effective_to
+                s_project_id, s_project_code,
+                s_effective_from, s_effective_to
             ) VALUES (
                 '{project_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(project_ref)[:36]}',
                 '{str(project_ref)[:20]}',
-                'Default Project',
-                true, '{date.today()}', NULL
+                '{date.today()}', NULL
             );
         """
         await self.run_query(insert_query)
@@ -377,17 +458,19 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
+        # ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_plant (
                 id, is_deleted, created_at, updated_at,
-                s_plant_code, s_plant_name,
-                s_active_flag, s_effective_from, s_effective_to
+                s_plant_id, s_plant_code, s_plant_description,
+                s_effective_from, s_effective_to
             ) VALUES (
                 '{plant_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(plant_ref)[:36]}',
                 '{str(plant_ref)[:20]}',
                 'Default Plant',
-                true, '{date.today()}', NULL
+                '{date.today()}', NULL
             );
         """
         await self.run_query(insert_query)
@@ -412,18 +495,20 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
+        # ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_gl_account (
                 id, is_deleted, created_at, updated_at,
-                s_gl_account_code, s_gl_account_name,
-                s_account_type, s_active_flag,
+                s_gl_account_id, s_gl_account_code, s_gl_account_description,
+                s_gl_account_type,
                 s_effective_from, s_effective_to
             ) VALUES (
                 '{gl_account_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
+                '{str(gl_account_ref)[:36]}',
                 '{str(gl_account_ref)[:20]}',
                 'Inventory Account',
-                'ASSET', true,
+                'ASSET',
                 '{date.today()}', NULL
             );
         """
@@ -449,17 +534,18 @@ class MasterDataService:
             self._inserted_refs[cache_key] = result[0]['id']
             return result[0]['id']
         
+        # ACTUAL COLUMN NAMES
         insert_query = f"""
             INSERT INTO {self.schema}.s_tax_rate (
                 id, is_deleted, created_at, updated_at,
-                s_tax_code, s_tax_rate, s_tax_type,
-                s_active_flag, s_effective_from, s_effective_to
+                s_tax_rate_id, s_tax_rate_name,
+                s_effective_from, s_effective_to
             ) VALUES (
                 '{tax_rate_ref}', false,
                 '{datetime.now()}', '{datetime.now()}',
-                'GST{int(rate)}',
-                {rate}, 'GST',
-                true, '{date.today()}', NULL
+                '{str(tax_rate_ref)[:36]}',
+                'GST{int(rate)}%',
+                '{date.today()}', NULL
             );
         """
         await self.run_query(insert_query)
@@ -480,3 +566,5 @@ class MasterDataService:
     def clear_cache(self):
         """Clear insertion cache"""
         self._inserted_refs.clear()
+        self._country_cache.clear()
+        self._state_cache.clear()
